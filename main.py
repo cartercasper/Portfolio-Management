@@ -16,8 +16,11 @@ from optimization import (
 
 CONFIG = {
     # Stock selection
-    'num_stocks': 150,           # Number of stocks to use (None = all 503)
+    'num_stocks': 50,           # Number of stocks to use (None = all 503)
                                  # Recommended: 50 (fast), 100 (medium), 250 (slow), 503 (very slow)
+    'random_sample': True,       # True: Random sample from S&P 500
+                                 # False: Top N by market cap (biased toward mega-caps)
+    'random_seed': 42,           # Seed for reproducibility (change to get different samples)
     
     # Time windows
     'N_train': 200,              # Training window size (days)
@@ -38,19 +41,13 @@ CONFIG = {
     'save_plots': True,          # Generate and save visualization plots
 }
 
-# Estimated runtime guide:
-# 50 stocks, 6×6 grid:    ~5 minutes
-# 100 stocks, 6×6 grid:   ~20 minutes  
-# 250 stocks, 6×6 grid:   ~90 minutes
-# 503 stocks, 6×6 grid:   ~3 hours
-# 503 stocks, 11×11 grid: ~10 hours
 
 #########################################################
 # END CONFIGURATION
 #########################################################
 
 print("="*60)
-print("PORTFOLIO OPTIMIZATION - SECTION III IMPLEMENTATION")
+print("PORTFOLIO OPTIMIZATION")
 print("="*60)
 
 # Data source for tickers
@@ -66,8 +63,14 @@ if CONFIG['num_stocks'] is None:
     print("\nUsing all S&P 500 stocks...")
     tickers = df["Symbol"].tolist()
 else:
-    print(f"\nSelecting top {CONFIG['num_stocks']} stocks...")
-    tickers = df["Symbol"].head(CONFIG['num_stocks']).tolist()
+    if CONFIG['random_sample']:
+        print(f"\nRandomly sampling {CONFIG['num_stocks']} stocks (seed={CONFIG['random_seed']})...")
+        np.random.seed(CONFIG['random_seed'])
+        all_symbols = df["Symbol"].tolist()
+        tickers = np.random.choice(all_symbols, size=CONFIG['num_stocks'], replace=False).tolist()
+    else:
+        print(f"\nSelecting top {CONFIG['num_stocks']} stocks by market cap...")
+        tickers = df["Symbol"].head(CONFIG['num_stocks']).tolist()
 print(f"✓ Selected {len(tickers)} stocks from S&P 500")
 
 # Download returns data
