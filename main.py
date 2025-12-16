@@ -16,8 +16,8 @@ from optimization import (
 
 CONFIG = {
     # Stock selection
-    'num_stocks': 50,           # Number of stocks to use (None = all 503)
-                                 # Recommended: 50 (fast), 100 (medium), 250 (slow), 503 (very slow)
+    'num_stocks': 150,            # Number of stocks to use (None = all 503)
+                                 # Recommended: 50 (fast), 100 (medium), 150 (slow)
     'random_sample': True,       # True: Random sample from S&P 500
                                  # False: Top N by market cap (biased toward mega-caps)
     'random_seed': 42,           # Seed for reproducibility (change to get different samples)
@@ -28,9 +28,10 @@ CONFIG = {
     'rebalance_freq': 30,        # Rebalancing frequency (days)
     'days_back': 1500,           # Historical data to download
     
-    # Optimization settings
-    'grid_size': 11,              # Grid resolution for (θ, φ)
-                                 # Options: 4 (very fast), 6 (fast), 8 (medium), 11 (paper precision)
+    # Optimization settings (now 3D: θ × φ × ψ)
+    'grid_size': 11,              # Grid resolution for (θ, φ, ψ) - cubic grid
+                                 # Options: 4 (64 combos), 6 (216 combos, recommended), 
+                                 #          8 (512 combos), 11 (1331 combos, paper precision)
     'n_jobs': -1,                # CPU cores (-1 = all available)
     'use_gmvp': True,            # Use Global Minimum Variance Portfolio (no return constraint)
                                  # True: Focus purely on covariance estimation (paper's approach)
@@ -47,7 +48,7 @@ CONFIG = {
 #########################################################
 
 print("="*60)
-print("PORTFOLIO OPTIMIZATION")
+print("PORTFOLIO OPTIMIZATION (with Tyler's M-Estimator)")
 print("="*60)
 
 # Data source for tickers
@@ -81,7 +82,8 @@ print(f"✓ Date range: {returns.index[0]} to {returns.index[-1]}")
 
 # Run hyperparameter optimization (Section III of paper)
 print("\nRunning hyperparameter optimization...")
-print(f"Configuration: {len(tickers)} stocks, {CONFIG['grid_size']}×{CONFIG['grid_size']} grid")
+print(f"Configuration: {len(tickers)} stocks, {CONFIG['grid_size']}³ grid ({CONFIG['grid_size']**3} combinations)")
+print("Estimators: SCM, MP, Tyler's M-estimator, Ledoit-Wolf shrinkage target")
 print("Optimizations: cached estimators + parallel QP solving")
 print(f"Portfolio approach: {'GMVP (Global Minimum Variance)' if CONFIG['use_gmvp'] else 'Mean-Variance with return constraint'}")
 results = optimize_portfolio(
@@ -118,10 +120,12 @@ print("\n" + "="*60)
 print("SUMMARY")
 print("="*60)
 print(f"Optimal hyperparameters:")
-print(f"  θ = {results['theta_opt']:.2f} (controls F vs Σ_MP mixing)")
-print(f"  φ = {results['phi_opt']:.2f} (controls regularized vs SCM mixing)")
+print(f"  θ = {results['theta_opt']:.2f} (F vs RobustBlend mixing)")
+print(f"  φ = {results['phi_opt']:.2f} (Regularized vs SCM mixing)")
+print(f"  ψ = {results['psi_opt']:.2f} (MP vs Tyler mixing)")
+print(f"\nFormula: Σ*(θ,φ,ψ) = φ[θF + (1-θ)(ψ·MP + (1-ψ)·Tyler)] + (1-φ)·SCM")
 print(f"\nPerformance improvement over SCM:")
-scm_vol = np.sqrt(results['avg_performance'][0, 0] * 252)
+scm_vol = np.sqrt(results['avg_performance'][0, 0, 0] * 252)  # 3D now
 opt_vol = np.sqrt(results['best_variance'] * 252)
 improvement = (scm_vol - opt_vol) / scm_vol * 100
 print(f"  SCM volatility: {scm_vol:.4f}")

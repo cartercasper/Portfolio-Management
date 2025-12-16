@@ -5,7 +5,7 @@ import cvxpy as cp
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 from functools import partial
-from estimators import MP_est, sample_cov, shrinkage_target
+from estimators import MP_est, sample_cov, shrinkage_target, tyler_m_estimator
 import scipy.linalg as la
 import warnings
 
@@ -14,18 +14,21 @@ import warnings
 # ST is shrinkage target matrix 
 
 #######################################
-# Section III Implementation
+# Section III Implementation (Extended with Tyler's M-Estimator)
 #######################################
 # Key fixes implemented:
 # 1. Removed double-demeaning (let pandas .cov() handle it)
 # 2. Changed to GMVP (no return constraint) to match paper's focus on covariance
 # 3. Fixed MP estimator to replace noise with mean of SIGNAL eigenvalues
-# 4. Global (θ, φ) selection by averaging across ALL periods (no look-ahead bias)
+# 4. Global (θ, φ, ψ) selection by averaging across ALL periods (no look-ahead bias)
 #
 # Performance optimizations:
 # 5. Parallelize over PERIODS (not grid points) - reduces serialization overhead
-# 6. Precompute matrix differences D1=F-MP, D2=MP-SCM for faster sigma_star
+# 6. Precompute matrix differences D1, D2, D3 for faster sigma_star
 # 7. Analytical GMVP solution when possible (avoids QP solver overhead)
+#
+# Three-way mixing formula (with Tyler):
+# Σ*(θ,φ,ψ) = φ[θF + (1-θ)(ψ·MP + (1-ψ)·Tyler)] + (1-φ)·SCM
 #######################################
 
 
@@ -81,26 +84,32 @@ def _solve_gmvp_analytical(sigma_star, weight_bounds=(0, 1)):
 
 def _process_single_period(args):
     """
-    Process a single rebalancing period - computes performance for ALL (θ,φ) combinations.
+    Process a single rebalancing period - computes performance for ALL (θ,φ,ψ) combinations.
     
     This is called in parallel across periods (not across grid points).
     Much more efficient because we only serialize data once per period.
     
+    Three-way mixing formula (with Tyler):
+    Σ*(θ,φ,ψ) = φ[θF + (1-θ)(ψ·MP + (1-ψ)·Tyler)] + (1-φ)·SCM
+    
     Parameters:
     -----------
     args : tuple
-        (period_idx, t0, returns_values, N_train, N_test, theta_grid, phi_grid, use_gmvp)
+        (period_idx, t0, returns_values, columns, N_train, N_test, 
+         theta_grid, phi_grid, psi_grid, use_gmvp)
     
     Returns:
     --------
     tuple : (period_idx, results_grid)
         period_idx: which period this is
-        results_grid: 2D array of variances for all (θ,φ) combinations
+        results_grid: 3D array of variances for all (θ,φ,ψ) combinations
     """
-    period_idx, t0, returns_values, columns, N_train, N_test, theta_grid, phi_grid, use_gmvp = args
+    period_idx, t0, returns_values, columns, N_train, N_test, theta_grid, phi_grid, psi_grid, use_gmvp = args
     
-    grid_size = len(theta_grid)
-    results_grid = np.zeros((grid_size, grid_size))
+    grid_size_theta = len(theta_grid)
+    grid_size_phi = len(phi_grid)
+    grid_size_psi = len(psi_grid)
+    results_grid = np.zeros((grid_size_theta, grid_size_phi, grid_size_psi))
     
     # Split data
     R_train = returns_values[t0:t0+N_train]
@@ -113,48 +122,64 @@ def _process_single_period(args):
     SCM_df = sample_cov(R_train_df)
     F_df = shrinkage_target(SCM_df)
     MP_arr = MP_est(R_train_df, SCM_df)
+    Tyler_arr = tyler_m_estimator(R_train_df, SCM_df)  # NEW: Tyler's M-estimator
     
     # Convert to numpy
     SCM = SCM_df.values
     F = F_df.values
     MP = MP_arr
+    Tyler = Tyler_arr
     
-    # OPTIMIZATION: Precompute differences
-    # sigma_star = phi * (theta*F + (1-theta)*MP) + (1-phi)*SCM
-    #            = phi*theta*F + phi*(1-theta)*MP + (1-phi)*SCM
-    #            = SCM + phi*(MP - SCM) + phi*theta*(F - MP)
-    #            = SCM + phi*D2 + phi*theta*D1
-    D1 = F - MP      # F - MP
-    D2 = MP - SCM    # MP - SCM
+    # OPTIMIZATION: Precompute differences for efficient sigma_star computation
+    # 
+    # Full formula: Σ*(θ,φ,ψ) = φ[θF + (1-θ)(ψ·MP + (1-ψ)·Tyler)] + (1-φ)·SCM
+    # 
+    # Let RobustBlend = ψ·MP + (1-ψ)·Tyler = Tyler + ψ·(MP - Tyler) = Tyler + ψ·D3
+    # Then: Σ* = φ[θF + (1-θ)·RobustBlend] + (1-φ)·SCM
+    #          = φ·θ·F + φ·(1-θ)·RobustBlend + (1-φ)·SCM
+    #          = SCM + φ·(RobustBlend - SCM) + φ·θ·(F - RobustBlend)
+    # 
+    # Precompute:
+    D3 = MP - Tyler      # MP - Tyler (for RobustBlend computation)
+    D_F_Tyler = F - Tyler  # F - Tyler (for final mixing)
+    D_Tyler_SCM = Tyler - SCM  # Tyler - SCM (base difference)
     
-    # Grid search over (θ, φ)
+    # Grid search over (θ, φ, ψ)
     for i, theta in enumerate(theta_grid):
         for j, phi in enumerate(phi_grid):
-            # OPTIMIZATION: Use precomputed differences
-            sigma_star = SCM + phi * D2 + phi * theta * D1
-            
-            # Ensure PSD with adaptive ridge
-            min_eig = np.linalg.eigvalsh(sigma_star).min()
-            if min_eig < 1e-8:
-                sigma_star = sigma_star + (abs(min_eig) + 1e-6) * np.eye(sigma_star.shape[0])
-            else:
-                sigma_star = sigma_star + 1e-8 * np.eye(sigma_star.shape[0])
-            
-            # OPTIMIZATION: Try analytical GMVP first
-            if use_gmvp:
-                p = _solve_gmvp_analytical(sigma_star)
-                if p is None:
-                    # Fallback to QP solver
+            for k, psi in enumerate(psi_grid):
+                # Compute RobustBlend = Tyler + ψ·(MP - Tyler)
+                # sigma_star = SCM + φ·(RobustBlend - SCM) + φ·θ·(F - RobustBlend)
+                #            = SCM + φ·(Tyler + ψ·D3 - SCM) + φ·θ·(F - Tyler - ψ·D3)
+                #            = SCM + φ·D_Tyler_SCM + φ·ψ·D3 + φ·θ·D_F_Tyler - φ·θ·ψ·D3
+                #            = SCM + φ·D_Tyler_SCM + φ·ψ·D3·(1 - θ) + φ·θ·D_F_Tyler
+                
+                sigma_star = (SCM + phi * D_Tyler_SCM + 
+                             phi * psi * (1 - theta) * D3 + 
+                             phi * theta * D_F_Tyler)
+                
+                # Ensure PSD with adaptive ridge
+                min_eig = np.linalg.eigvalsh(sigma_star).min()
+                if min_eig < 1e-8:
+                    sigma_star = sigma_star + (abs(min_eig) + 1e-6) * np.eye(sigma_star.shape[0])
+                else:
+                    sigma_star = sigma_star + 1e-8 * np.eye(sigma_star.shape[0])
+                
+                # OPTIMIZATION: Try analytical GMVP first
+                if use_gmvp:
+                    p = _solve_gmvp_analytical(sigma_star)
+                    if p is None:
+                        # Fallback to QP solver
+                        p = _solve_markowitz_fast(sigma_star)
+                else:
                     p = _solve_markowitz_fast(sigma_star)
-            else:
-                p = _solve_markowitz_fast(sigma_star)
-            
-            if p is not None:
-                # Realized returns on test period
-                portfolio_returns = R_test @ p
-                results_grid[i, j] = np.var(portfolio_returns)
-            else:
-                results_grid[i, j] = np.inf
+                
+                if p is not None:
+                    # Realized returns on test period
+                    portfolio_returns = R_test @ p
+                    results_grid[i, j, k] = np.var(portfolio_returns)
+                else:
+                    results_grid[i, j, k] = np.inf
     
     return (period_idx, results_grid)
 
@@ -208,16 +233,19 @@ def _solve_markowitz_fast(sigma_star, weight_bounds=(0, 1)):
 def optimize_portfolio(returns, N_train=200, N_test=30, rebalance_freq=30, 
                       grid_size=6, n_jobs=-1, use_gmvp=True, verbose=True):
     """
-    Find optimal (theta, phi) using rolling window approach.
+    Find optimal (θ, φ, ψ) using rolling window approach with Tyler's M-estimator.
     
-    Implements Section III of the paper: grid search over (θ, φ) to find
-    the combination that minimizes average out-of-sample portfolio variance.
+    Implements Section III of the paper with three-way mixing:
+    Σ*(θ,φ,ψ) = φ[θF + (1-θ)(ψ·MP + (1-ψ)·Tyler)] + (1-φ)·SCM
+    
+    Grid search over (θ, φ, ψ) to find the combination that minimizes 
+    average out-of-sample portfolio variance.
     
     OPTIMIZATIONS:
     - Parallelizes over PERIODS (not grid points) - much less serialization
     - Precomputes matrix differences for faster sigma_star computation
     - Uses analytical GMVP when bounds allow (100x faster than QP)
-    - Caches estimators (SCM, F, MP) per period
+    - Caches estimators (SCM, F, MP, Tyler) per period
     
     Parameters:
     -----------
@@ -230,8 +258,9 @@ def optimize_portfolio(returns, N_train=200, N_test=30, rebalance_freq=30,
     rebalance_freq : int
         Rebalancing frequency (default: 30 days)
     grid_size : int
-        Number of grid points for θ and φ (default: 6 for 36 combinations)
-        Use 6 for quick testing, 11 for paper-level precision
+        Number of grid points for θ, φ, and ψ (default: 6)
+        Use 6 for quick testing (216 combinations)
+        Use 11 for paper-level precision (1331 combinations)
     n_jobs : int
         Number of parallel workers (default: -1 uses all CPUs)
         Set to 1 to disable parallelization
@@ -246,16 +275,20 @@ def optimize_portfolio(returns, N_train=200, N_test=30, rebalance_freq=30,
     --------
     results : dict
         Dictionary containing:
-        - theta_opt: optimal θ value
-        - phi_opt: optimal φ value
+        - theta_opt: optimal θ value (F vs RobustBlend mixing)
+        - phi_opt: optimal φ value (regularized vs SCM mixing)
+        - psi_opt: optimal ψ value (MP vs Tyler mixing)
         - best_variance: average out-of-sample variance
-        - avg_performance: 2D array of average performance
-        - performance_3d: 3D array of all period performances
-        - theta_grid, phi_grid: parameter grids
+        - avg_performance: 3D array of average performance (θ × φ × ψ)
+        - performance_4d: 4D array of all period performances
+        - theta_grid, phi_grid, psi_grid: parameter grids
     """
-    # Setup
+    # Setup grids for all three parameters
     theta_grid = np.linspace(0, 1, grid_size)
     phi_grid = np.linspace(0, 1, grid_size)
+    psi_grid = np.linspace(0, 1, grid_size)
+    
+    total_combinations = grid_size ** 3
     
     # Determine number of workers
     if n_jobs == -1:
@@ -269,21 +302,22 @@ def optimize_portfolio(returns, N_train=200, N_test=30, rebalance_freq=30,
     
     if verbose:
         print(f"\n{'='*60}")
-        print(f"HYPERPARAMETER OPTIMIZATION")
+        print(f"HYPERPARAMETER OPTIMIZATION (with Tyler's M-Estimator)")
         print(f"{'='*60}")
         print(f"Total periods: {T}")
         print(f"Training window: {N_train} days")
         print(f"Test window: {N_test} days")
         print(f"Rebalancing frequency: {rebalance_freq} days")
         print(f"Number of rebalancing periods: {num_periods}")
-        print(f"Grid size: {len(theta_grid)} × {len(phi_grid)} = {len(theta_grid) * len(phi_grid)} combinations")
+        print(f"Grid size: {grid_size}×{grid_size}×{grid_size} = {total_combinations} combinations")
+        print(f"Parameters: θ (F vs RobustBlend), φ (Regularized vs SCM), ψ (MP vs Tyler)")
         print(f"Parallel workers: {n_jobs} CPUs")
         print(f"Portfolio type: {'GMVP (no return constraint)' if use_gmvp else 'Mean-variance (with return constraint)'}")
         print(f"Optimizations: period-parallel, precomputed diffs, analytical GMVP")
         print(f"{'='*60}\n")
     
-    # Storage: (grid_size theta × grid_size phi × num_periods)
-    performance = np.zeros((grid_size, grid_size, num_periods))
+    # Storage: (θ × φ × ψ × num_periods)
+    performance = np.zeros((grid_size, grid_size, grid_size, num_periods))
     
     # Convert returns to numpy once (avoid repeated conversion)
     returns_values = returns.values
@@ -291,7 +325,8 @@ def optimize_portfolio(returns, N_train=200, N_test=30, rebalance_freq=30,
     
     # Prepare arguments for each period
     period_args = [
-        (period_idx, t0, returns_values, columns, N_train, N_test, theta_grid, phi_grid, use_gmvp)
+        (period_idx, t0, returns_values, columns, N_train, N_test, 
+         theta_grid, phi_grid, psi_grid, use_gmvp)
         for period_idx, t0 in enumerate(rebalance_times)
     ]
     
@@ -312,29 +347,31 @@ def optimize_portfolio(returns, N_train=200, N_test=30, rebalance_freq=30,
         
         # Unpack results
         for period_idx, results_grid in results_list:
-            performance[:, :, period_idx] = results_grid
+            performance[:, :, :, period_idx] = results_grid
     else:
         # Serial execution (for debugging or single period)
         iterator = tqdm(period_args, desc="Rebalancing periods") if verbose else period_args
         for args in iterator:
             period_idx, results_grid = _process_single_period(args)
-            performance[:, :, period_idx] = results_grid
+            performance[:, :, :, period_idx] = results_grid
     
     # Average across periods
-    avg_performance = np.mean(performance, axis=2)
+    avg_performance = np.mean(performance, axis=3)
     
-    # Find optimal (theta, phi)
+    # Find optimal (θ, φ, ψ)
     optimal_idx = np.unravel_index(np.argmin(avg_performance), avg_performance.shape)
     theta_opt = theta_grid[optimal_idx[0]]
     phi_opt = phi_grid[optimal_idx[1]]
+    psi_opt = psi_grid[optimal_idx[2]]
     best_variance = avg_performance[optimal_idx]
     
     if verbose:
         print(f"\n{'='*60}")
         print(f"OPTIMIZATION RESULTS")
         print(f"{'='*60}")
-        print(f"Optimal θ: {theta_opt:.2f}")
-        print(f"Optimal φ: {phi_opt:.2f}")
+        print(f"Optimal θ: {theta_opt:.2f} (F vs RobustBlend)")
+        print(f"Optimal φ: {phi_opt:.2f} (Regularized vs SCM)")
+        print(f"Optimal ψ: {psi_opt:.2f} (MP vs Tyler)")
         print(f"Average out-of-sample variance: {best_variance:.8f}")
         print(f"Average out-of-sample volatility (annualized): {np.sqrt(best_variance * 252):.4f}")
         print(f"{'='*60}\n")
@@ -343,11 +380,13 @@ def optimize_portfolio(returns, N_train=200, N_test=30, rebalance_freq=30,
     return {
         'theta_opt': theta_opt,
         'phi_opt': phi_opt,
+        'psi_opt': psi_opt,
         'best_variance': best_variance,
         'avg_performance': avg_performance,
-        'performance_3d': performance,
+        'performance_4d': performance,
         'theta_grid': theta_grid,
-        'phi_grid': phi_grid
+        'phi_grid': phi_grid,
+        'psi_grid': psi_grid
     }
 
 def ensure_psd(matrix, epsilon=1e-8):
@@ -453,7 +492,10 @@ def solve_markowitz(sigma_star, g, r_daily=None, weight_bounds=(0, 1)):
 
 def plot_performance_heatmap(results, save_path='performance_heatmap.png'):
     """
-    Plot heatmap of average performance across (θ, φ) grid.
+    Plot heatmaps of average performance across (θ, φ) grid at optimal ψ,
+    and (θ, ψ) at optimal φ, and (φ, ψ) at optimal θ.
+    
+    Creates a 2x2 subplot with three 2D slices of the 3D performance surface.
     
     Parameters:
     -----------
@@ -462,42 +504,109 @@ def plot_performance_heatmap(results, save_path='performance_heatmap.png'):
     save_path : str
         Path to save figure
     """
-    avg_performance = results['avg_performance']
+    avg_performance = results['avg_performance']  # Shape: (θ, φ, ψ)
     theta_grid = results['theta_grid']
     phi_grid = results['phi_grid']
+    psi_grid = results['psi_grid']
     
-    # Convert variance to annualized volatility for interpretability
-    avg_volatility = np.sqrt(avg_performance * 252)
-    
-    # Plot
-    fig, ax = plt.subplots(figsize=(10, 8))
-    im = ax.imshow(avg_volatility, cmap='RdYlGn_r', aspect='auto', origin='lower')
-    
-    # Mark optimal point
     theta_opt = results['theta_opt']
     phi_opt = results['phi_opt']
-    theta_idx = np.where(theta_grid == theta_opt)[0][0]
-    phi_idx = np.where(phi_grid == phi_opt)[0][0]
-    ax.plot(theta_idx, phi_idx, 'b*', markersize=20, label=f'Optimal: θ={theta_opt:.1f}, φ={phi_opt:.1f}')
+    psi_opt = results['psi_opt']
     
-    # Set ticks
-    ax.set_xticks(range(len(theta_grid)))
-    ax.set_yticks(range(len(phi_grid)))
-    ax.set_xticklabels([f'{x:.1f}' for x in theta_grid])
-    ax.set_yticklabels([f'{y:.1f}' for y in phi_grid])
+    # Get indices for optimal values
+    theta_opt_idx = np.argmin(np.abs(theta_grid - theta_opt))
+    phi_opt_idx = np.argmin(np.abs(phi_grid - phi_opt))
+    psi_opt_idx = np.argmin(np.abs(psi_grid - psi_opt))
     
-    # Labels
-    ax.set_xlabel('θ (Shrinkage Target vs MP mixing)', fontsize=12)
-    ax.set_ylabel('φ (Regularized vs SCM mixing)', fontsize=12)
-    ax.set_title('Average Out-of-Sample Volatility (Annualized)', fontsize=14)
+    # Create figure with 2x2 subplots
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
     
-    # Colorbar
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label('Annualized Volatility', rotation=270, labelpad=20)
+    # ====================
+    # Subplot 1: θ vs φ at optimal ψ
+    # ====================
+    ax1 = axes[0, 0]
+    slice_theta_phi = avg_performance[:, :, psi_opt_idx]
+    vol_theta_phi = np.sqrt(slice_theta_phi * 252)
     
-    # Legend
-    ax.legend(loc='upper right')
+    im1 = ax1.imshow(vol_theta_phi.T, cmap='RdYlGn_r', aspect='auto', origin='lower')
+    ax1.plot(theta_opt_idx, phi_opt_idx, 'b*', markersize=15)
+    ax1.set_xticks(range(len(theta_grid)))
+    ax1.set_yticks(range(len(phi_grid)))
+    ax1.set_xticklabels([f'{x:.1f}' for x in theta_grid])
+    ax1.set_yticklabels([f'{y:.1f}' for y in phi_grid])
+    ax1.set_xlabel('θ (F vs RobustBlend)', fontsize=10)
+    ax1.set_ylabel('φ (Regularized vs SCM)', fontsize=10)
+    ax1.set_title(f'θ vs φ at ψ={psi_opt:.2f}', fontsize=12)
+    plt.colorbar(im1, ax=ax1, label='Ann. Volatility')
     
+    # ====================
+    # Subplot 2: θ vs ψ at optimal φ
+    # ====================
+    ax2 = axes[0, 1]
+    slice_theta_psi = avg_performance[:, phi_opt_idx, :]
+    vol_theta_psi = np.sqrt(slice_theta_psi * 252)
+    
+    im2 = ax2.imshow(vol_theta_psi.T, cmap='RdYlGn_r', aspect='auto', origin='lower')
+    ax2.plot(theta_opt_idx, psi_opt_idx, 'b*', markersize=15)
+    ax2.set_xticks(range(len(theta_grid)))
+    ax2.set_yticks(range(len(psi_grid)))
+    ax2.set_xticklabels([f'{x:.1f}' for x in theta_grid])
+    ax2.set_yticklabels([f'{y:.1f}' for y in psi_grid])
+    ax2.set_xlabel('θ (F vs RobustBlend)', fontsize=10)
+    ax2.set_ylabel('ψ (MP vs Tyler)', fontsize=10)
+    ax2.set_title(f'θ vs ψ at φ={phi_opt:.2f}', fontsize=12)
+    plt.colorbar(im2, ax=ax2, label='Ann. Volatility')
+    
+    # ====================
+    # Subplot 3: φ vs ψ at optimal θ
+    # ====================
+    ax3 = axes[1, 0]
+    slice_phi_psi = avg_performance[theta_opt_idx, :, :]
+    vol_phi_psi = np.sqrt(slice_phi_psi * 252)
+    
+    im3 = ax3.imshow(vol_phi_psi.T, cmap='RdYlGn_r', aspect='auto', origin='lower')
+    ax3.plot(phi_opt_idx, psi_opt_idx, 'b*', markersize=15)
+    ax3.set_xticks(range(len(phi_grid)))
+    ax3.set_yticks(range(len(psi_grid)))
+    ax3.set_xticklabels([f'{x:.1f}' for x in phi_grid])
+    ax3.set_yticklabels([f'{y:.1f}' for y in psi_grid])
+    ax3.set_xlabel('φ (Regularized vs SCM)', fontsize=10)
+    ax3.set_ylabel('ψ (MP vs Tyler)', fontsize=10)
+    ax3.set_title(f'φ vs ψ at θ={theta_opt:.2f}', fontsize=12)
+    plt.colorbar(im3, ax=ax3, label='Ann. Volatility')
+    
+    # ====================
+    # Subplot 4: Summary text
+    # ====================
+    ax4 = axes[1, 1]
+    ax4.axis('off')
+    
+    summary_text = f"""
+    OPTIMAL HYPERPARAMETERS
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    θ = {theta_opt:.2f}  (F vs RobustBlend)
+        θ=0: Pure RobustBlend (MP/Tyler mix)
+        θ=1: Pure Shrinkage Target (F)
+    
+    φ = {phi_opt:.2f}  (Regularized vs SCM)
+        φ=0: Pure Sample Covariance (SCM)
+        φ=1: Pure Regularized Estimator
+    
+    ψ = {psi_opt:.2f}  (MP vs Tyler)
+        ψ=0: Pure Tyler's M-Estimator
+        ψ=1: Pure Marchenko-Pastur (MP)
+    
+    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    Best Volatility: {np.sqrt(results['best_variance'] * 252):.4f}
+    """
+    
+    ax4.text(0.1, 0.5, summary_text, transform=ax4.transAxes, 
+             fontsize=11, verticalalignment='center', fontfamily='monospace',
+             bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+    
+    plt.suptitle('3D Hyperparameter Optimization Results (Tyler + MP + F + SCM)', 
+                 fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"✓ Performance heatmap saved to: {save_path}")
@@ -507,6 +616,8 @@ def plot_performance_heatmap(results, save_path='performance_heatmap.png'):
 def compare_estimators(results):
     """
     Compare the optimal combination with baseline estimators.
+    
+    Now includes Tyler's M-estimator in the comparisons.
     
     Parameters:
     -----------
@@ -521,19 +632,34 @@ def compare_estimators(results):
     avg_performance = results['avg_performance']
     theta_grid = results['theta_grid']
     phi_grid = results['phi_grid']
+    psi_grid = results['psi_grid']
     
     # Find indices for extreme values (0 and 1)
     theta_0_idx = np.argmin(np.abs(theta_grid - 0))
     theta_1_idx = np.argmin(np.abs(theta_grid - 1))
     phi_0_idx = np.argmin(np.abs(phi_grid - 0))
     phi_1_idx = np.argmin(np.abs(phi_grid - 1))
+    psi_0_idx = np.argmin(np.abs(psi_grid - 0))
+    psi_1_idx = np.argmin(np.abs(psi_grid - 1))
     
     # Extract performance for key combinations
+    # Remember: avg_performance is indexed [theta, phi, psi]
+    # Formula: Σ*(θ,φ,ψ) = φ[θF + (1-θ)(ψ·MP + (1-ψ)·Tyler)] + (1-φ)·SCM
     comparisons = {
-        'SCM Only (θ=0, φ=0)': avg_performance[theta_0_idx, phi_0_idx],
-        'MP Only (θ=0, φ=1)': avg_performance[theta_0_idx, phi_1_idx],
-        'Shrinkage Only (θ=1, φ=1)': avg_performance[theta_1_idx, phi_1_idx],
-        f'Optimal (θ={results["theta_opt"]:.2f}, φ={results["phi_opt"]:.2f})': results['best_variance']
+        # SCM Only: φ=0 means pure SCM (θ and ψ don't matter)
+        'SCM Only (φ=0)': avg_performance[theta_0_idx, phi_0_idx, psi_0_idx],
+        
+        # MP Only: φ=1, θ=0, ψ=1 means: 1·[0·F + 1·(1·MP + 0·Tyler)] = MP
+        'MP Only (θ=0, φ=1, ψ=1)': avg_performance[theta_0_idx, phi_1_idx, psi_1_idx],
+        
+        # Tyler Only: φ=1, θ=0, ψ=0 means: 1·[0·F + 1·(0·MP + 1·Tyler)] = Tyler
+        'Tyler Only (θ=0, φ=1, ψ=0)': avg_performance[theta_0_idx, phi_1_idx, psi_0_idx],
+        
+        # Shrinkage Only: φ=1, θ=1 means: 1·[1·F + 0·RobustBlend] = F
+        'Shrinkage Only (θ=1, φ=1)': avg_performance[theta_1_idx, phi_1_idx, psi_0_idx],
+        
+        # Optimal combination
+        f'Optimal (θ={results["theta_opt"]:.2f}, φ={results["phi_opt"]:.2f}, ψ={results["psi_opt"]:.2f})': results['best_variance']
     }
     
     # Convert to DataFrame with annualized volatility
@@ -546,7 +672,7 @@ def compare_estimators(results):
         for name, var in comparisons.items()
     ])
     
-    # Calculate improvement
+    # Calculate improvement vs SCM
     scm_vol = comparison_df.loc[0, 'Annualized Volatility']
     comparison_df['Improvement vs SCM'] = (
         (scm_vol - comparison_df['Annualized Volatility']) / scm_vol * 100
@@ -558,7 +684,9 @@ def compare_estimators(results):
 def plot_performance_timeseries(results, returns, N_train=200, N_test=30, 
                                 rebalance_freq=30, save_path='performance_timeseries.png'):
     """
-    Plot time series of realized variance for optimal (θ, φ) vs baselines.
+    Plot time series of realized variance for optimal (θ, φ, ψ) vs baselines.
+    
+    Now includes Tyler's M-estimator in the comparisons.
     
     Parameters:
     -----------
@@ -571,48 +699,57 @@ def plot_performance_timeseries(results, returns, N_train=200, N_test=30,
     save_path : str
         Path to save figure
     """
-    performance_3d = results['performance_3d']
+    performance_4d = results['performance_4d']  # Shape: (θ, φ, ψ, periods)
     theta_grid = results['theta_grid']
     phi_grid = results['phi_grid']
+    psi_grid = results['psi_grid']
     
-    # Get indices for key methods
-    theta_opt_idx = np.where(theta_grid == results['theta_opt'])[0][0]
-    phi_opt_idx = np.where(phi_grid == results['phi_opt'])[0][0]
+    # Get indices for optimal values
+    theta_opt_idx = np.argmin(np.abs(theta_grid - results['theta_opt']))
+    phi_opt_idx = np.argmin(np.abs(phi_grid - results['phi_opt']))
+    psi_opt_idx = np.argmin(np.abs(psi_grid - results['psi_opt']))
     
     # Find indices for extreme values
     theta_0_idx = np.argmin(np.abs(theta_grid - 0))
     theta_1_idx = np.argmin(np.abs(theta_grid - 1))
     phi_0_idx = np.argmin(np.abs(phi_grid - 0))
     phi_1_idx = np.argmin(np.abs(phi_grid - 1))
+    psi_0_idx = np.argmin(np.abs(psi_grid - 0))
+    psi_1_idx = np.argmin(np.abs(psi_grid - 1))
     
     # Extract time series for each method
     T = len(returns)
     rebalance_times = range(0, T - N_train - N_test, rebalance_freq)
     periods = list(range(len(rebalance_times)))
     
-    optimal_series = performance_3d[theta_opt_idx, phi_opt_idx, :]
-    scm_series = performance_3d[theta_0_idx, phi_0_idx, :]
-    mp_series = performance_3d[theta_0_idx, phi_1_idx, :]
-    shrinkage_series = performance_3d[theta_1_idx, phi_1_idx, :]
+    # performance_4d indexed as [theta, phi, psi, period]
+    optimal_series = performance_4d[theta_opt_idx, phi_opt_idx, psi_opt_idx, :]
+    scm_series = performance_4d[theta_0_idx, phi_0_idx, psi_0_idx, :]  # φ=0 → SCM
+    mp_series = performance_4d[theta_0_idx, phi_1_idx, psi_1_idx, :]   # θ=0, φ=1, ψ=1 → MP
+    tyler_series = performance_4d[theta_0_idx, phi_1_idx, psi_0_idx, :]  # θ=0, φ=1, ψ=0 → Tyler
+    shrinkage_series = performance_4d[theta_1_idx, phi_1_idx, psi_0_idx, :]  # θ=1, φ=1 → F
     
     # Convert to annualized volatility
     optimal_vol = np.sqrt(optimal_series * 252)
     scm_vol = np.sqrt(scm_series * 252)
     mp_vol = np.sqrt(mp_series * 252)
+    tyler_vol = np.sqrt(tyler_series * 252)
     shrinkage_vol = np.sqrt(shrinkage_series * 252)
     
     # Plot
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(periods, scm_vol, label='SCM Only', linewidth=2, alpha=0.7)
-    ax.plot(periods, mp_vol, label='MP Only', linewidth=2, alpha=0.7)
-    ax.plot(periods, shrinkage_vol, label='Shrinkage Only', linewidth=2, alpha=0.7)
-    ax.plot(periods, optimal_vol, label=f'Optimal (θ={results["theta_opt"]:.1f}, φ={results["phi_opt"]:.1f})', 
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(periods, scm_vol, label='SCM Only', linewidth=2, alpha=0.7, color='gray')
+    ax.plot(periods, mp_vol, label='MP Only', linewidth=2, alpha=0.7, color='blue')
+    ax.plot(periods, tyler_vol, label='Tyler Only', linewidth=2, alpha=0.7, color='green')
+    ax.plot(periods, shrinkage_vol, label='Shrinkage Only (F)', linewidth=2, alpha=0.7, color='orange')
+    ax.plot(periods, optimal_vol, 
+            label=f'Optimal (θ={results["theta_opt"]:.1f}, φ={results["phi_opt"]:.1f}, ψ={results["psi_opt"]:.1f})', 
             linewidth=2.5, color='red')
     
     ax.set_xlabel('Rebalancing Period', fontsize=12)
     ax.set_ylabel('Annualized Volatility', fontsize=12)
-    ax.set_title('Out-of-Sample Volatility Over Time', fontsize=14)
-    ax.legend(fontsize=10)
+    ax.set_title('Out-of-Sample Volatility Over Time (with Tyler\'s M-Estimator)', fontsize=14)
+    ax.legend(fontsize=10, loc='upper right')
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
