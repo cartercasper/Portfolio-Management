@@ -28,6 +28,8 @@ SYNTHETIC_CONFIG = {
     'alpha': 3.0,          # Shape parameter for Pareto
     'daily_vol': 0.02,     # Target daily volatility (~32% annualized)
     'correlation': 0.3,    # Average pairwise correlation
+    'annual_return': 0.12, # Target annualized return (~12% to ensure 10% is feasible)
+    'daily_return': 0.12 / 252,  # Daily expected return
 }
 
 
@@ -78,17 +80,19 @@ def correlation_to_covariance(corr_matrix, volatilities):
 # Gaussian Returns
 # ============================================================================
 
-def generate_gaussian_returns(N=100, T=1200, daily_vol=0.02, avg_corr=0.3, seed=42):
+def generate_gaussian_returns(N=100, T=1200, daily_vol=0.02, avg_corr=0.3, 
+                               daily_return=None, seed=42):
     """
-    Generate Gaussian returns with realistic correlation structure.
+    Generate Gaussian returns with realistic correlation structure and positive drift.
     
-    r_t ~ N(0, Σ)
+    r_t ~ N(μ, Σ)
     
     Parameters:
         N: Number of assets
         T: Number of time periods
         daily_vol: Target daily volatility
         avg_corr: Average pairwise correlation
+        daily_return: Expected daily return (default: ~12% annualized)
         seed: Random seed
     
     Returns:
@@ -97,16 +101,24 @@ def generate_gaussian_returns(N=100, T=1200, daily_vol=0.02, avg_corr=0.3, seed=
     """
     np.random.seed(seed)
     
+    if daily_return is None:
+        daily_return = SYNTHETIC_CONFIG['daily_return']
+    
     # Generate correlation and covariance
     corr = generate_correlation_matrix(N, avg_corr, seed)
     vols = daily_vol * (1 + 0.3 * np.random.randn(N))  # Some variation in volatilities
     vols = np.clip(vols, 0.01, 0.05)
     true_cov = correlation_to_covariance(corr, vols)
     
+    # Generate expected returns with some variation across assets
+    # Average ~12% annualized, range roughly 8-16%
+    mu = daily_return * (1 + 0.3 * np.random.randn(N))
+    mu = np.clip(mu, daily_return * 0.5, daily_return * 1.5)
+    
     # Generate returns via Cholesky decomposition
     L = np.linalg.cholesky(true_cov)
     Z = np.random.randn(T, N)
-    returns = Z @ L.T
+    returns = Z @ L.T + mu  # Add drift
     
     # Create DataFrame
     columns = [f'Asset_{i}' for i in range(N)]
@@ -119,11 +131,12 @@ def generate_gaussian_returns(N=100, T=1200, daily_vol=0.02, avg_corr=0.3, seed=
 # Student-t Returns (Heavy Tails)
 # ============================================================================
 
-def generate_student_t_returns(N=100, T=1200, nu=3.5, daily_vol=0.02, avg_corr=0.3, seed=42):
+def generate_student_t_returns(N=100, T=1200, nu=3.5, daily_vol=0.02, avg_corr=0.3, 
+                                daily_return=None, seed=42):
     """
-    Generate Student-t returns with heavy tails.
+    Generate Student-t returns with heavy tails and positive drift.
     
-    r_t ~ t_ν(0, Σ) - multivariate Student-t
+    r_t ~ t_ν(μ, Σ) - multivariate Student-t with drift
     
     This tests Tyler's M-estimator which is designed for heavy-tailed distributions.
     ν = 3.5 gives heavy tails but finite variance (requires ν > 2).
@@ -134,6 +147,7 @@ def generate_student_t_returns(N=100, T=1200, nu=3.5, daily_vol=0.02, avg_corr=0
         T: Number of time periods
         daily_vol: Target daily volatility
         avg_corr: Average pairwise correlation
+        daily_return: Expected daily return (default: ~12% annualized)
         seed: Random seed
     
     Returns:
@@ -142,11 +156,18 @@ def generate_student_t_returns(N=100, T=1200, nu=3.5, daily_vol=0.02, avg_corr=0
     """
     np.random.seed(seed)
     
+    if daily_return is None:
+        daily_return = SYNTHETIC_CONFIG['daily_return']
+    
     # Generate correlation and covariance
     corr = generate_correlation_matrix(N, avg_corr, seed)
     vols = daily_vol * (1 + 0.3 * np.random.randn(N))
     vols = np.clip(vols, 0.01, 0.05)
     true_cov = correlation_to_covariance(corr, vols)
+    
+    # Generate expected returns with some variation across assets
+    mu = daily_return * (1 + 0.3 * np.random.randn(N))
+    mu = np.clip(mu, daily_return * 0.5, daily_return * 1.5)
     
     # Generate multivariate Student-t via:
     # X = Z / sqrt(W/nu) where Z ~ N(0, Σ) and W ~ χ²(nu)
@@ -164,6 +185,9 @@ def generate_student_t_returns(N=100, T=1200, nu=3.5, daily_vol=0.02, avg_corr=0
     scale_factor = np.sqrt((nu - 2) / nu) if nu > 2 else 1.0
     returns = returns * scale_factor
     
+    # Add drift
+    returns = returns + mu
+    
     # Create DataFrame
     columns = [f'Asset_{i}' for i in range(N)]
     returns_df = pd.DataFrame(returns, columns=columns)
@@ -175,9 +199,10 @@ def generate_student_t_returns(N=100, T=1200, nu=3.5, daily_vol=0.02, avg_corr=0
 # Pareto (Extreme Heavy Tails)
 # ============================================================================
 
-def generate_pareto_returns(N=100, T=1200, alpha=3.0, daily_vol=0.02, avg_corr=0.3, seed=42):
+def generate_pareto_returns(N=100, T=1200, alpha=3.0, daily_vol=0.02, avg_corr=0.3, 
+                            daily_return=None, seed=42):
     """
-    Generate returns with Pareto-distributed residuals (extreme heavy tails).
+    Generate returns with Pareto-distributed residuals (extreme heavy tails) and positive drift.
     
     Uses factor model with Pareto innovations instead of Gaussian.
     This is a stress test - most estimators will struggle.
@@ -188,6 +213,7 @@ def generate_pareto_returns(N=100, T=1200, alpha=3.0, daily_vol=0.02, avg_corr=0
         alpha: Pareto shape parameter (lower = heavier tails, need α > 2 for finite variance)
         daily_vol: Target daily volatility
         avg_corr: Average pairwise correlation
+        daily_return: Expected daily return (default: ~12% annualized)
         seed: Random seed
     
     Returns:
@@ -196,38 +222,46 @@ def generate_pareto_returns(N=100, T=1200, alpha=3.0, daily_vol=0.02, avg_corr=0
     """
     np.random.seed(seed)
     
+    if daily_return is None:
+        daily_return = SYNTHETIC_CONFIG['daily_return']
+    
     # Generate correlation structure
     corr = generate_correlation_matrix(N, avg_corr, seed)
     vols = daily_vol * (1 + 0.3 * np.random.randn(N))
     vols = np.clip(vols, 0.01, 0.05)
     
-    # Generate Pareto samples
-    # Pareto has support [1, inf), so we transform to get zero-centered returns
-    # X ~ Pareto(α) => (X - E[X]) / std(X) has mean 0 and variance 1
+    # Generate expected returns with some variation across assets
+    mu = daily_return * (1 + 0.3 * np.random.randn(N))
+    mu = np.clip(mu, daily_return * 0.5, daily_return * 1.5)
     
-    L = np.linalg.cholesky(corr)
+    # Generate Pareto samples using scipy for consistent parameterization
+    # scipy.stats.pareto with loc=0, scale=1 gives standard Pareto on [1, inf)
+    pareto_rv = stats.pareto(alpha)
+    pareto_samples = pareto_rv.rvs(size=(T, N))
     
-    # Generate standard Pareto and standardize
-    pareto_samples = np.random.pareto(alpha, (T, N))
-    
-    # Standardize: subtract mean, divide by std
+    # Standardize using theoretical moments for Pareto on [1, inf)
+    # Mean: alpha / (alpha - 1) for alpha > 1
+    # Var: alpha / ((alpha-1)^2 * (alpha-2)) for alpha > 2
     if alpha > 1:
         pareto_mean = alpha / (alpha - 1)
     else:
-        pareto_mean = np.mean(pareto_samples, axis=0)
+        pareto_mean = pareto_samples.mean()
     
     if alpha > 2:
         pareto_std = np.sqrt(alpha / ((alpha - 1)**2 * (alpha - 2)))
     else:
-        pareto_std = np.std(pareto_samples, axis=0)
+        pareto_std = pareto_samples.std()
     
+    L = np.linalg.cholesky(corr)
+    
+    # Standardize to mean 0, variance 1
     standardized = (pareto_samples - pareto_mean) / pareto_std
     
     # Apply correlation structure
     correlated = standardized @ L.T
     
-    # Scale to target volatilities
-    returns = correlated * vols
+    # Scale to target volatilities and add drift
+    returns = correlated * vols + mu
     
     # Approximate true covariance (correlation structure is correct, but tails differ)
     true_cov = correlation_to_covariance(corr, vols)
@@ -243,13 +277,14 @@ def generate_pareto_returns(N=100, T=1200, alpha=3.0, daily_vol=0.02, avg_corr=0
 # Factor Model (Realistic Structure)
 # ============================================================================
 
-def generate_factor_model_returns(N=100, T=1200, K=5, daily_vol=0.02, seed=42):
+def generate_factor_model_returns(N=100, T=1200, K=5, daily_vol=0.02, daily_return=None, seed=42):
     """
-    Generate returns from a factor model with known true covariance.
+    Generate returns from a factor model with known true covariance and positive drift.
     
-    r_t = B @ f_t + ε_t
+    r_t = μ + B @ f_t + ε_t
     
     where:
+        μ is the expected return vector
         f_t ~ N(0, I_K) - K factors
         ε_t ~ N(0, D) - idiosyncratic noise
         B is N × K factor loading matrix
@@ -263,6 +298,7 @@ def generate_factor_model_returns(N=100, T=1200, K=5, daily_vol=0.02, seed=42):
         T: Number of time periods
         K: Number of factors
         daily_vol: Target daily volatility
+        daily_return: Expected daily return (default: ~12% annualized)
         seed: Random seed
     
     Returns:
@@ -272,6 +308,13 @@ def generate_factor_model_returns(N=100, T=1200, K=5, daily_vol=0.02, seed=42):
         idio_var: Diagonal of D
     """
     np.random.seed(seed)
+    
+    if daily_return is None:
+        daily_return = SYNTHETIC_CONFIG['daily_return']
+    
+    # Generate expected returns with some variation across assets
+    mu = daily_return * (1 + 0.3 * np.random.randn(N))
+    mu = np.clip(mu, daily_return * 0.5, daily_return * 1.5)
     
     # Generate factor loadings
     # Scale so that factor variance explains ~50% of total variance
@@ -284,8 +327,8 @@ def generate_factor_model_returns(N=100, T=1200, K=5, daily_vol=0.02, seed=42):
     factors = np.random.randn(T, K)
     idiosyncratic = np.random.randn(T, N) * np.sqrt(idio_var)
     
-    # Returns = factor returns + idiosyncratic
-    returns = factors @ factor_loadings.T + idiosyncratic
+    # Returns = drift + factor returns + idiosyncratic
+    returns = mu + factors @ factor_loadings.T + idiosyncratic
     
     # True covariance matrix
     true_cov = factor_loadings @ factor_loadings.T + np.diag(idio_var)

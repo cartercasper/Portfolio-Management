@@ -2,7 +2,9 @@
 Portfolio Optimization Module
 
 Implements covariance matrix estimation and hyperparameter optimization for
-Global Minimum Variance Portfolio (GMVP) optimization.
+Mean-Variance Portfolio Optimization with return constraint.
+
+Paper's Table I: "WITH CONSTRAINT OF ACHIEVING ATLEAST 10% RETURN"
 """
 
 import numpy as np
@@ -15,6 +17,10 @@ import scipy.linalg as la
 from estimators import sample_cov, shrinkage_target, MP_est, tyler_m_estimator
 
 warnings.filterwarnings('ignore')
+
+# Target annualized return (10% as per paper's Table I)
+TARGET_ANNUAL_RETURN = 0.10
+TARGET_DAILY_RETURN = TARGET_ANNUAL_RETURN / 252  # ~0.0397% daily
 
 
 def identity_estimator(n_assets):
@@ -34,8 +40,100 @@ def scaled_identity_estimator(SCM):
     return avg_var * np.eye(n)
 
 
+def solve_mvo(sigma, mu, target_return=TARGET_DAILY_RETURN, weight_bounds=(0, 1)):
+    """
+    Solve Mean-Variance Optimization with return constraint.
+    
+    minimize    w^T Σ w
+    subject to  w^T μ >= target_return  (10% annualized)
+                w^T 1 = 1
+                0 <= w <= 1
+    
+    Parameters:
+        sigma: Covariance matrix (N x N)
+        mu: Expected returns vector (N,)
+        target_return: Minimum required daily return (default: 10%/252)
+        weight_bounds: (min_weight, max_weight) tuple
+    
+    Returns:
+        p: Optimal portfolio weights (N,)
+    """
+    import cvxpy as cp
+    
+    if isinstance(sigma, pd.DataFrame):
+        sigma = sigma.values
+    if isinstance(mu, pd.Series):
+        mu = mu.values
+    
+    # Regularize covariance matrix
+    min_eig = np.linalg.eigvalsh(sigma).min()
+    if min_eig < 1e-8:
+        sigma = sigma + (abs(min_eig) + 1e-6) * np.eye(sigma.shape[0])
+    else:
+        sigma = sigma + 1e-8 * np.eye(sigma.shape[0])
+    
+    n = sigma.shape[0]
+    w = cp.Variable(n)
+    
+    # Objective: minimize portfolio variance
+    objective = cp.Minimize(cp.quad_form(w, sigma))
+    
+    # Constraints
+    constraints = [
+        cp.sum(w) == 1,                    # Weights sum to 1
+        w @ mu >= target_return,           # Return constraint (>= 10% annualized)
+        w >= weight_bounds[0],             # Lower bound
+        w <= weight_bounds[1],             # Upper bound
+    ]
+    
+    problem = cp.Problem(objective, constraints)
+    
+    try:
+        problem.solve(solver=cp.OSQP, verbose=False)
+        if problem.status in ['optimal', 'optimal_inaccurate']:
+            return w.value
+    except:
+        pass
+    
+    # Fallback: try with relaxed return constraint
+    try:
+        # If infeasible, try with just the max return achievable
+        constraints_relaxed = [
+            cp.sum(w) == 1,
+            w >= weight_bounds[0],
+            w <= weight_bounds[1],
+        ]
+        # Maximize return subject to constraints
+        problem_max_ret = cp.Problem(cp.Maximize(w @ mu), constraints_relaxed)
+        problem_max_ret.solve(solver=cp.OSQP, verbose=False)
+        max_achievable_return = w.value @ mu if w.value is not None else 0
+        
+        # Use the max achievable return if target is infeasible
+        if max_achievable_return < target_return:
+            # Use max return as constraint
+            constraints_fallback = [
+                cp.sum(w) == 1,
+                w @ mu >= max_achievable_return * 0.99,  # Slightly relaxed
+                w >= weight_bounds[0],
+                w <= weight_bounds[1],
+            ]
+            problem_fallback = cp.Problem(cp.Minimize(cp.quad_form(w, sigma)), constraints_fallback)
+            problem_fallback.solve(solver=cp.OSQP, verbose=False)
+            if problem_fallback.status in ['optimal', 'optimal_inaccurate']:
+                return w.value
+    except:
+        pass
+    
+    # Final fallback: equal weights
+    return np.ones(n) / n
+
+
 def solve_gmvp(sigma, weight_bounds=(0, 1)):
-    """Solve Global Minimum Variance Portfolio analytically."""
+    """
+    Solve Global Minimum Variance Portfolio (no return constraint).
+    
+    Kept for backward compatibility and comparison.
+    """
     if isinstance(sigma, pd.DataFrame):
         sigma = sigma.values
     
@@ -107,10 +205,13 @@ def our_3d_method(theta, phi, psi, SCM, F, MP, Tyler):
 
 
 def _evaluate_estimator_single_period(args):
-    """Evaluate a single estimator on one period."""
+    """Evaluate a single estimator on one period with 10% return constraint."""
     t0, R_train_values, R_test_values, columns, estimator_name, n_assets = args
     
     R_train_df = pd.DataFrame(R_train_values, columns=columns)
+    
+    # Estimate expected returns from training data
+    mu = R_train_df.mean().values
     
     if estimator_name == 'Identity':
         sigma = identity_estimator(n_assets)
@@ -131,7 +232,8 @@ def _evaluate_estimator_single_period(args):
     else:
         raise ValueError(f"Unknown estimator: {estimator_name}")
     
-    p = solve_gmvp(sigma)
+    # Solve MVO with 10% return constraint
+    p = solve_mvo(sigma, mu)
     portfolio_returns = R_test_values @ p
     return np.var(portfolio_returns)
 
@@ -142,6 +244,9 @@ def _grid_search_2d_period(args):
     
     R_train_df = pd.DataFrame(R_train_values, columns=columns)
     
+    # Estimate expected returns from training data
+    mu = R_train_df.mean().values
+    
     SCM = sample_cov(R_train_df).values
     F = shrinkage_target(sample_cov(R_train_df)).values
     MP = MP_est(R_train_df, sample_cov(R_train_df))
@@ -151,7 +256,7 @@ def _grid_search_2d_period(args):
     for i, theta in enumerate(theta_grid):
         for j, phi in enumerate(phi_grid):
             sigma_star = paper_dual_method_2d(theta, phi, SCM, F, MP)
-            p = solve_gmvp(sigma_star)
+            p = solve_mvo(sigma_star, mu)
             portfolio_returns = R_test_values @ p
             results[i, j] = np.var(portfolio_returns)
     
@@ -164,6 +269,9 @@ def _grid_search_3d_period(args):
     
     R_train_df = pd.DataFrame(R_train_values, columns=columns)
     
+    # Estimate expected returns from training data
+    mu = R_train_df.mean().values
+    
     SCM = sample_cov(R_train_df).values
     F = shrinkage_target(sample_cov(R_train_df)).values
     MP = MP_est(R_train_df, sample_cov(R_train_df))
@@ -175,7 +283,7 @@ def _grid_search_3d_period(args):
         for j, phi in enumerate(phi_grid):
             for k, psi in enumerate(psi_grid):
                 sigma_star = our_3d_method(theta, phi, psi, SCM, F, MP, Tyler)
-                p = solve_gmvp(sigma_star)
+                p = solve_mvo(sigma_star, mu)
                 portfolio_returns = R_test_values @ p
                 results[i, j, k] = np.var(portfolio_returns)
     
@@ -184,7 +292,7 @@ def _grid_search_3d_period(args):
 
 def run_optimization(returns, N_train=200, N_test=30, rebalance_freq=30,
                      grid_size=11, n_jobs=None, verbose=True):
-    """Run full comparison of all estimators."""
+    """Run full comparison of all estimators with 10% return constraint."""
     if n_jobs is None:
         n_jobs = min(cpu_count(), 14)
     
@@ -197,11 +305,12 @@ def run_optimization(returns, N_train=200, N_test=30, rebalance_freq=30,
     
     if verbose:
         print(f"\n{'='*70}")
-        print(f"PORTFOLIO OPTIMIZATION")
+        print(f"PORTFOLIO OPTIMIZATION (10% Return Constraint)")
         print(f"{'='*70}")
         print(f"Assets: {n_assets}")
         print(f"Training window: {N_train} days")
         print(f"Test window: {N_test} days")
+        print(f"Target return: {TARGET_ANNUAL_RETURN*100:.0f}% annualized")
         print(f"Rebalancing periods: {n_periods}")
         print(f"Grid size: {grid_size}")
         print(f"Parallel workers: {n_jobs}")
