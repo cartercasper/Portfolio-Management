@@ -2,9 +2,11 @@
 Main entry point for Portfolio Optimization
 
 Usage:
-    python main.py                    # Run full paper replication
+    python main.py                    # Run full paper replication (real data)
     python main.py --quick            # Quick test with one dataset, one frequency
     python main.py --dataset sp500    # Run specific dataset
+    python main.py --synthetic        # Run synthetic data experiments
+    python main.py --synthetic --quick # Quick synthetic test
 """
 
 import sys
@@ -33,7 +35,7 @@ CONFIG = {
     # Data settings
     'num_stocks': 100,
     'random_sample': True,
-    'random_seed': 42,
+    'random_seed': 50,
     'start_date': '2020-01-01',
     'end_date': None,
     
@@ -143,6 +145,13 @@ def run_paper_replication(config):
 
 
 def main():
+    # Check for synthetic mode
+    if '--synthetic' in sys.argv:
+        # Delegate to run_synthetic.py
+        from run_synthetic import main as run_synthetic_main
+        run_synthetic_main()
+        return
+    
     # Parse command line arguments
     quick_mode = '--quick' in sys.argv
     specific_dataset = None
