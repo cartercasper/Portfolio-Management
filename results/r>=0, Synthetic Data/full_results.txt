@@ -1,0 +1,406 @@
+0.0, synthetic
+
+
+======================================================================
+SYNTHETIC DATA EXPERIMENTS
+======================================================================
+Distributions: ['gaussian', 'student_t', 'pareto', 'factor_model']
+Assets: 100, Observations: 1200
+Frequencies: [30, 60, 90] days
+Seeds: 1 (for Monte Carlo averaging)
+======================================================================
+
+
+============================================================
+Distribution: Gaussian N(0,Σ)
+============================================================
+
+============================================================
+Synthetic Data: Gaussian N(0,Σ)
+============================================================
+Description: Baseline Gaussian - SCM should be near-optimal
+Dimensions: T=1200 observations, N=100 assets
+Sample mean: 0.000689
+Sample daily std: 0.0189
+Annualized volatility: 30.0%
+Excess kurtosis: -0.02 (Gaussian=0)
+SCM Frobenius error vs true: 8.4%
+True Σ condition number: 622.9
+============================================================
+  Seed 50, 30-day rebalancing... 3D Vol: 10.07%
+  Seed 50, 60-day rebalancing... 3D Vol: 10.08%
+  Seed 50, 90-day rebalancing... 3D Vol: 10.15%
+
+============================================================
+Distribution: Student-t (ν=3.5)
+============================================================
+
+============================================================
+Synthetic Data: Student-t (ν=3.5)
+============================================================
+Description: Heavy tails - Tyler should outperform
+Dimensions: T=1200 observations, N=100 assets
+Sample mean: 0.000538
+Sample daily std: 0.0182
+Annualized volatility: 28.9%
+Excess kurtosis: 8.12 (Gaussian=0)
+SCM Frobenius error vs true: 17.8%
+True Σ condition number: 622.9
+============================================================
+  Seed 50, 30-day rebalancing... 3D Vol: 9.90%
+  Seed 50, 60-day rebalancing... 3D Vol: 9.97%
+  Seed 50, 90-day rebalancing... 3D Vol: 9.92%
+
+============================================================
+Distribution: Pareto (α=3.0)
+============================================================
+
+============================================================
+Synthetic Data: Pareto (α=3.0)
+============================================================
+Description: Extreme heavy tails - stress test
+Dimensions: T=1200 observations, N=100 assets
+Sample mean: 0.000284
+Sample daily std: 0.0177
+Annualized volatility: 28.1%
+Excess kurtosis: 54.07 (Gaussian=0)
+SCM Frobenius error vs true: 25.9%
+True Σ condition number: 622.9
+============================================================
+  Seed 50, 30-day rebalancing... 3D Vol: 8.75%
+  Seed 50, 60-day rebalancing... 3D Vol: 8.90%
+  Seed 50, 90-day rebalancing... 3D Vol: 8.88%
+
+============================================================
+Distribution: Factor Model (K=5)
+============================================================
+
+============================================================
+Synthetic Data: Factor Model (K=5)
+============================================================
+Description: Realistic structure - MP should excel at eigenvalue cleaning
+Dimensions: T=1200 observations, N=100 assets
+Sample mean: 0.000432
+Sample daily std: 0.0146
+Annualized volatility: 23.2%
+Excess kurtosis: -0.00 (Gaussian=0)
+SCM Frobenius error vs true: 13.8%
+True Σ condition number: 26.6
+============================================================
+  Seed 50, 30-day rebalancing... 3D Vol: 1.93%
+  Seed 50, 60-day rebalancing... 3D Vol: 1.96%
+  Seed 50, 90-day rebalancing... 3D Vol: 1.93%
+
+================================================================================
+TABLE: Annualized Volatility (%) - 30-day Rebalancing
+================================================================================
+    Estimator Factor Gaussian Pareto Student-t
+   Σ_Identity   2.66    16.82  14.44     16.39
+     Σ_Scaled   2.66    16.82  14.43     16.40
+        Σ_SCM   2.30    10.12   8.82     10.11
+     Σ_Target   2.42    14.53  13.15     14.37
+         Σ_MP   2.25    10.47   8.93     10.33
+      Σ_Tyler   2.33    10.11   8.85      9.96
+Σ* (Paper 2D)   1.93    10.09   8.76     10.07
+  Σ* (Our 3D)   1.93    10.07   8.75      9.90
+
+--- LaTeX ---
+\begin{tabular}{lllll}
+\toprule
+Estimator & Factor & Gaussian & Pareto & Student-t \\
+\midrule
+Σ_Identity & 2.66 & 16.82 & 14.44 & 16.39 \\
+Σ_Scaled & 2.66 & 16.82 & 14.43 & 16.40 \\
+Σ_SCM & 2.30 & 10.12 & 8.82 & 10.11 \\
+Σ_Target & 2.42 & 14.53 & 13.15 & 14.37 \\
+Σ_MP & 2.25 & 10.47 & 8.93 & 10.33 \\
+Σ_Tyler & 2.33 & 10.11 & 8.85 & 9.96 \\
+Σ* (Paper 2D) & 1.93 & 10.09 & 8.76 & 10.07 \\
+Σ* (Our 3D) & 1.93 & 10.07 & 8.75 & 9.90 \\
+\bottomrule
+\end{tabular}
+
+
+================================================================================
+TABLE: Annualized Volatility (%) - 60-day Rebalancing
+================================================================================
+    Estimator Factor Gaussian Pareto Student-t
+   Σ_Identity   2.68    17.05  14.67     16.57
+     Σ_Scaled   2.68    17.05  14.66     16.59
+        Σ_SCM   2.32    10.12   8.95     10.40
+     Σ_Target   2.45    14.30  13.40     14.60
+         Σ_MP   2.28    10.51   9.14     10.55
+      Σ_Tyler   2.35    10.12   8.92     10.00
+Σ* (Paper 2D)   1.96    10.09   8.93     10.29
+  Σ* (Our 3D)   1.96    10.08   8.90      9.97
+
+--- LaTeX ---
+\begin{tabular}{lllll}
+\toprule
+Estimator & Factor & Gaussian & Pareto & Student-t \\
+\midrule
+Σ_Identity & 2.68 & 17.05 & 14.67 & 16.57 \\
+Σ_Scaled & 2.68 & 17.05 & 14.66 & 16.59 \\
+Σ_SCM & 2.32 & 10.12 & 8.95 & 10.40 \\
+Σ_Target & 2.45 & 14.30 & 13.40 & 14.60 \\
+Σ_MP & 2.28 & 10.51 & 9.14 & 10.55 \\
+Σ_Tyler & 2.35 & 10.12 & 8.92 & 10.00 \\
+Σ* (Paper 2D) & 1.96 & 10.09 & 8.93 & 10.29 \\
+Σ* (Our 3D) & 1.96 & 10.08 & 8.90 & 9.97 \\
+\bottomrule
+\end{tabular}
+
+
+================================================================================
+TABLE: Annualized Volatility (%) - 90-day Rebalancing
+================================================================================
+    Estimator Factor Gaussian Pareto Student-t
+   Σ_Identity   2.68    16.95  14.70     16.49
+     Σ_Scaled   2.68    16.97  14.70     16.49
+        Σ_SCM   2.28    10.17   8.96     10.45
+     Σ_Target   2.44    14.84  12.58     14.29
+         Σ_MP   2.23    10.55   9.17     10.55
+      Σ_Tyler   2.31    10.19   8.91      9.92
+Σ* (Paper 2D)   1.93    10.15   8.96     10.37
+  Σ* (Our 3D)   1.93    10.15   8.88      9.92
+
+--- LaTeX ---
+\begin{tabular}{lllll}
+\toprule
+Estimator & Factor & Gaussian & Pareto & Student-t \\
+\midrule
+Σ_Identity & 2.68 & 16.95 & 14.70 & 16.49 \\
+Σ_Scaled & 2.68 & 16.97 & 14.70 & 16.49 \\
+Σ_SCM & 2.28 & 10.17 & 8.96 & 10.45 \\
+Σ_Target & 2.44 & 14.84 & 12.58 & 14.29 \\
+Σ_MP & 2.23 & 10.55 & 9.17 & 10.55 \\
+Σ_Tyler & 2.31 & 10.19 & 8.91 & 9.92 \\
+Σ* (Paper 2D) & 1.93 & 10.15 & 8.96 & 10.37 \\
+Σ* (Our 3D) & 1.93 & 10.15 & 8.88 & 9.92 \\
+\bottomrule
+\end{tabular}
+
+
+================================================================================
+DETAILED RESULTS: Factor Model (K=5)
+Description: Realistic structure - MP should excel at eigenvalue cleaning
+================================================================================
+
+--- 30-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+Paper's Dual Method Σ*(θ,φ)         θ=0.50, φ=0.90      0.000001         0.019348               15.928768
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.50, φ=0.90, ψ=1.00      0.000001         0.019348               15.928768
+      Marchenko-Pastur (MP)                      -      0.000002         0.022451                2.445298
+                        SCM                      -      0.000002         0.023014                0.000000
+        Tyler's M-Estimator                      -      0.000002         0.023261               -1.074355
+       Shrinkage Target (F)                      -      0.000002         0.024241               -5.333658
+Scaled Identity (sigma^2*I)                      -      0.000003         0.026609              -15.621695
+               Identity (I)                      -      0.000003         0.026609              -15.621695
+
+Optimal 3D Parameters: θ=0.50, φ=0.90, ψ=1.00
+
+--- 60-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.50, φ=0.90, ψ=0.90      0.000002         0.019581               15.752669
+Paper's Dual Method Σ*(θ,φ)         θ=0.60, φ=0.80      0.000002         0.019582               15.747604
+      Marchenko-Pastur (MP)                      -      0.000002         0.022828                1.781792
+                        SCM                      -      0.000002         0.023242                0.000000
+        Tyler's M-Estimator                      -      0.000002         0.023510               -1.153271
+       Shrinkage Target (F)                      -      0.000002         0.024473               -5.297412
+Scaled Identity (sigma^2*I)                      -      0.000003         0.026764              -15.155173
+               Identity (I)                      -      0.000003         0.026764              -15.155173
+
+Optimal 3D Parameters: θ=0.50, φ=0.90, ψ=0.90
+
+--- 90-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+Paper's Dual Method Σ*(θ,φ)         θ=0.50, φ=0.80      0.000001         0.019332               15.397627
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.50, φ=0.80, ψ=1.00      0.000001         0.019332               15.397627
+      Marchenko-Pastur (MP)                      -      0.000002         0.022315                2.340083
+                        SCM                      -      0.000002         0.022850                0.000000
+        Tyler's M-Estimator                      -      0.000002         0.023127               -1.214963
+       Shrinkage Target (F)                      -      0.000002         0.024363               -6.623511
+Scaled Identity (sigma^2*I)                      -      0.000003         0.026798              -17.279957
+               Identity (I)                      -      0.000003         0.026798              -17.279957
+
+Optimal 3D Parameters: θ=0.50, φ=0.80, ψ=1.00
+
+================================================================================
+DETAILED RESULTS: Gaussian N(0,Σ)
+Description: Baseline Gaussian - SCM should be near-optimal
+================================================================================
+
+--- 30-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.70, φ=0.30, ψ=0.10      0.000040         0.100683                0.476564
+Paper's Dual Method Σ*(θ,φ)         θ=1.00, φ=0.20      0.000040         0.100894                0.267396
+        Tyler's M-Estimator                      -      0.000041         0.101144                0.020052
+                        SCM                      -      0.000041         0.101165                0.000000
+      Marchenko-Pastur (MP)                      -      0.000044         0.104743               -3.536716
+       Shrinkage Target (F)                      -      0.000084         0.145334              -43.661155
+               Identity (I)                      -      0.000112         0.168197              -66.260427
+Scaled Identity (sigma^2*I)                      -      0.000112         0.168222              -66.285097
+
+Optimal 3D Parameters: θ=0.70, φ=0.30, ψ=0.10
+
+--- 60-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.40, φ=0.70, ψ=0.10      0.000040         0.100814                0.405003
+Paper's Dual Method Σ*(θ,φ)         θ=0.90, φ=0.30      0.000040         0.100873                0.346949
+        Tyler's M-Estimator                      -      0.000041         0.101174                0.049927
+                        SCM                      -      0.000041         0.101224                0.000000
+      Marchenko-Pastur (MP)                      -      0.000044         0.105062               -3.791350
+       Shrinkage Target (F)                      -      0.000081         0.142992              -41.262916
+Scaled Identity (sigma^2*I)                      -      0.000115         0.170507              -68.445257
+               Identity (I)                      -      0.000115         0.170510              -68.448260
+
+Optimal 3D Parameters: θ=0.40, φ=0.70, ψ=0.10
+
+--- 90-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+Paper's Dual Method Σ*(θ,φ)         θ=0.90, φ=0.20      0.000041         0.101493                0.240420
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.90, φ=0.20, ψ=1.00      0.000041         0.101493                0.240420
+                        SCM                      -      0.000041         0.101737                0.000000
+        Tyler's M-Estimator                      -      0.000041         0.101858               -0.118708
+      Marchenko-Pastur (MP)                      -      0.000044         0.105546               -3.743142
+       Shrinkage Target (F)                      -      0.000087         0.148402              -45.868106
+               Identity (I)                      -      0.000114         0.169548              -66.652232
+Scaled Identity (sigma^2*I)                      -      0.000114         0.169683              -66.784940
+
+Optimal 3D Parameters: θ=0.90, φ=0.20, ψ=1.00
+
+================================================================================
+DETAILED RESULTS: Pareto (α=3.0)
+Description: Extreme heavy tails - stress test
+================================================================================
+
+--- 30-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.00, φ=0.30, ψ=0.90      0.000030         0.087520                0.823438
+Paper's Dual Method Σ*(θ,φ)         θ=0.20, φ=0.40      0.000030         0.087615                0.715424
+                        SCM                      -      0.000031         0.088247                0.000000
+        Tyler's M-Estimator                      -      0.000031         0.088514               -0.302827
+      Marchenko-Pastur (MP)                      -      0.000032         0.089300               -1.193433
+       Shrinkage Target (F)                      -      0.000069         0.131515              -49.030897
+Scaled Identity (sigma^2*I)                      -      0.000083         0.144296              -63.514834
+               Identity (I)                      -      0.000083         0.144421              -63.656469
+
+Optimal 3D Parameters: θ=0.00, φ=0.30, ψ=0.90
+
+--- 60-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.10, φ=0.90, ψ=0.20      0.000031         0.088952                0.664274
+        Tyler's M-Estimator                      -      0.000032         0.089242                0.341100
+Paper's Dual Method Σ*(θ,φ)         θ=0.30, φ=0.20      0.000032         0.089269                0.310341
+                        SCM                      -      0.000032         0.089547                0.000000
+      Marchenko-Pastur (MP)                      -      0.000033         0.091422               -2.093533
+       Shrinkage Target (F)                      -      0.000071         0.133951              -49.586637
+Scaled Identity (sigma^2*I)                      -      0.000085         0.146623              -63.737764
+               Identity (I)                      -      0.000085         0.146748              -63.878109
+
+Optimal 3D Parameters: θ=0.10, φ=0.90, ψ=0.20
+
+--- 90-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.00, φ=0.70, ψ=0.20      0.000031         0.088831                0.860831
+        Tyler's M-Estimator                      -      0.000032         0.089098                0.562955
+                        SCM                      -      0.000032         0.089602                0.000000
+Paper's Dual Method Σ*(θ,φ)         θ=0.00, φ=0.00      0.000032         0.089602                0.000000
+      Marchenko-Pastur (MP)                      -      0.000033         0.091744               -2.390274
+       Shrinkage Target (F)                      -      0.000063         0.125827              -40.428538
+Scaled Identity (sigma^2*I)                      -      0.000086         0.146998              -64.057049
+               Identity (I)                      -      0.000086         0.147005              -64.064883
+
+Optimal 3D Parameters: θ=0.00, φ=0.70, ψ=0.20
+
+================================================================================
+DETAILED RESULTS: Student-t (ν=3.5)
+Description: Heavy tails - Tyler should outperform
+================================================================================
+
+--- 30-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.30, φ=1.00, ψ=0.30      0.000039         0.099030                2.095879
+        Tyler's M-Estimator                      -      0.000039         0.099619                1.513409
+Paper's Dual Method Σ*(θ,φ)         θ=0.60, φ=0.20      0.000040         0.100713                0.431358
+                        SCM                      -      0.000041         0.101150                0.000000
+      Marchenko-Pastur (MP)                      -      0.000042         0.103302               -2.127623
+       Shrinkage Target (F)                      -      0.000082         0.143739              -42.105279
+               Identity (I)                      -      0.000107         0.163862              -61.999182
+Scaled Identity (sigma^2*I)                      -      0.000107         0.164010              -62.146121
+
+Optimal 3D Parameters: θ=0.30, φ=1.00, ψ=0.30
+
+--- 60-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.10, φ=1.00, ψ=0.10      0.000039         0.099721                4.132974
+        Tyler's M-Estimator                      -      0.000040         0.099951                3.911845
+Paper's Dual Method Σ*(θ,φ)         θ=0.80, φ=0.50      0.000042         0.102924                1.053135
+                        SCM                      -      0.000043         0.104020                0.000000
+      Marchenko-Pastur (MP)                      -      0.000044         0.105484               -1.407487
+       Shrinkage Target (F)                      -      0.000085         0.145986              -40.344426
+               Identity (I)                      -      0.000109         0.165699              -59.296027
+Scaled Identity (sigma^2*I)                      -      0.000109         0.165907              -59.495938
+
+Optimal 3D Parameters: θ=0.10, φ=1.00, ψ=0.10
+
+--- 90-day Rebalancing (seed=50) ---
+                     Method             Parameters  Avg Variance  Ann. Volatility  Improvement vs SCM (%)
+ Our 3D Extension Σ*(θ,φ,ψ) θ=0.00, φ=1.00, ψ=0.00      0.000039         0.099170                5.071907
+        Tyler's M-Estimator                      -      0.000039         0.099170                5.071907
+Paper's Dual Method Σ*(θ,φ)         θ=0.60, φ=0.30      0.000043         0.103657                0.776699
+                        SCM                      -      0.000043         0.104468                0.000000
+      Marchenko-Pastur (MP)                      -      0.000044         0.105502               -0.989688
+       Shrinkage Target (F)                      -      0.000081         0.142907              -36.794273
+Scaled Identity (sigma^2*I)                      -      0.000108         0.164907              -57.853873
+               Identity (I)                      -      0.000108         0.164907              -57.853873
+
+Optimal 3D Parameters: θ=0.00, φ=1.00, ψ=0.00
+
+================================================================================
+OPTIMAL PARAMETERS BY DISTRIBUTION
+================================================================================
+
+Factor Model (K=5):
+  θ (F vs RobustBlend): 0.50 ± 0.00
+  φ (Regularized vs SCM): 0.87 ± 0.05
+  ψ (MP vs Tyler): 0.97 ± 0.05
+  → MP-dominant (ψ=0.97)
+
+Gaussian N(0,Σ):
+  θ (F vs RobustBlend): 0.67 ± 0.21
+  φ (Regularized vs SCM): 0.40 ± 0.22
+  ψ (MP vs Tyler): 0.40 ± 0.42
+  → Balanced MP/Tyler (ψ=0.40)
+
+Pareto (α=3.0):
+  θ (F vs RobustBlend): 0.03 ± 0.05
+  φ (Regularized vs SCM): 0.63 ± 0.25
+  ψ (MP vs Tyler): 0.43 ± 0.33
+  → Balanced MP/Tyler (ψ=0.43)
+
+Student-t (ν=3.5):
+  θ (F vs RobustBlend): 0.13 ± 0.12
+  φ (Regularized vs SCM): 1.00 ± 0.00
+  ψ (MP vs Tyler): 0.13 ± 0.12
+  → Tyler-dominant (ψ=0.13)
+
+
+================================================================================
+ESTIMATOR WEIGHTS TABLE (SYNTHETIC DATA - Averaged Across Seeds)
+================================================================================
+      Distribution Frequency  w_SCM  w_F  w_MP  w_Tyler   θ   φ   ψ
+Factor Model (K=5)       30d    0.1 0.45 0.450    0.000 0.5 0.9 1.0
+Factor Model (K=5)       60d    0.1 0.45 0.405    0.045 0.5 0.9 0.9
+Factor Model (K=5)       90d    0.2 0.40 0.400    0.000 0.5 0.8 1.0
+   Gaussian N(0,Σ)       30d    0.7 0.21 0.009    0.081 0.7 0.3 0.1
+   Gaussian N(0,Σ)       60d    0.3 0.28 0.042    0.378 0.4 0.7 0.1
+   Gaussian N(0,Σ)       90d    0.8 0.18 0.020    0.000 0.9 0.2 1.0
+    Pareto (α=3.0)       30d    0.7 0.00 0.270    0.030 0.0 0.3 0.9
+    Pareto (α=3.0)       60d    0.1 0.09 0.162    0.648 0.1 0.9 0.2
+    Pareto (α=3.0)       90d    0.3 0.00 0.140    0.560 0.0 0.7 0.2
+ Student-t (ν=3.5)       30d    0.0 0.30 0.210    0.490 0.3 1.0 0.3
+ Student-t (ν=3.5)       60d    0.0 0.10 0.090    0.810 0.1 1.0 0.1
+ Student-t (ν=3.5)       90d    0.0 0.00 0.000    1.000 0.0 1.0 0.0
+
+Note: w_SCM + w_F + w_MP + w_Tyler = 1.0 for each row
